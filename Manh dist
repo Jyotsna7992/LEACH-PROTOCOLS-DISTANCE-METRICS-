@@ -1,0 +1,231 @@
+close all;
+clear;
+clc;
+
+%%%%%%%%%%%%%%%%%%%% Network Establishment Parameters %%%%%%%%%%%%%%%%%%%%
+%%% Area of Operation %%%
+xm = 100; ym = 100;
+x = 0; y = 0; % added for better display results of the plot
+n = 100; % Number of Nodes in the field
+dead_nodes = 0; % Number of Dead Nodes initially
+sinkx = 10; sinky = 100; % Sink coordinates
+
+%%% Energy Values %%%
+Eo = 2; % Initial energy of a node in Joules
+Eelec = 50*10^(-9); ETx = Eelec; ERx = Eelec; % Energy for transmission and reception circuitry
+Eamp = 100*10^(-12); % Transmit Amplifier
+EDA = 5*10^(-9); % Data Aggregation Energy
+k = 4000; % Size of data package in bits
+p = 0.05; % Percentage of cluster heads
+No = p * n; % Number of clusters
+rnd = 0; % Round of operation
+operating_nodes = n;
+transmissions = 0; flag1stdead = 0;
+
+%%% Initialize Throughput and Delay %%%
+throughput_per_round = zeros(1,1000);
+delay_per_round = zeros(1,1000);
+
+%%% Initialize Sensor Network %%%
+for i = 1:n
+    SN(i).id = i;
+    SN(i).x = rand * xm; % X-axis coordinates of sensor node
+    SN(i).y = rand * ym; % Y-axis coordinates of sensor node
+    SN(i).E = Eo; % Initial energy of each node
+    SN(i).role = 0; % 0 = normal node, 1 = cluster head
+    SN(i).cluster = 0; % Cluster number
+    SN(i).cond = 1; % 1 = operational, 0 = dead
+    SN(i).rop = 0; % rounds node was operational
+    SN(i).rleft = 0; % rounds left for Cluster Head election eligibility
+    SN(i).dtch = 0; % distance to cluster head
+    SN(i).dts = 0; % distance to sink
+    SN(i).tel = 0; % times elected as cluster head
+    SN(i).rn = 0; % round elected as cluster head
+    SN(i).chid = 0; % cluster head ID
+
+    % Plot initial node distribution and sink
+    hold on;
+    figure(1)
+    plot(x, y, xm, ym, SN(i).x, SN(i).y, 'ob', sinkx, sinky, '*r');
+    title 'Wireless Sensor Network';
+    xlabel '(m)';
+    ylabel '(m)';
+end
+
+%%%%%%%%%%%%%%% Set-Up Phase and Operation %%%%%%%%%%%%%%%
+
+while operating_nodes > 0
+    % Current Round
+    rnd = rnd + 1;
+    t = p / (1 - p * (mod(rnd, 1 / p))); % Threshold for cluster head election
+    tleft = mod(rnd, 1 / p); % Re-election value
+
+    % Reset Cluster Heads and Energy Consumption
+    CLheads = 0; energy = 0; transmissions_this_round = 0;
+
+    % Cluster Head Election
+    for i = 1:n
+        SN(i).cluster = 0; SN(i).role = 0; SN(i).chid = 0; % Reset node roles
+        if SN(i).rleft > 0
+            SN(i).rleft = SN(i).rleft - 1;
+        end
+        if (SN(i).E > 0) && (SN(i).rleft == 0) && (rand < t)
+            SN(i).role = 1;
+            SN(i).rn = rnd;
+            SN(i).tel = SN(i).tel + 1;
+            SN(i).rleft = 1 / p - tleft;
+            SN(i).dts = abs(sinkx - SN(i).x) + abs(sinky - SN(i).y); % Manhattan distance to sink
+            CLheads = CLheads + 1;
+            SN(i).cluster = CLheads;
+            CL(CLheads).x = SN(i).x;
+            CL(CLheads).y = SN(i).y;
+            CL(CLheads).id = i;
+        end
+    end
+    CL = CL(1:CLheads); % Fix CL size to actual number of cluster heads
+
+    % Grouping the Nodes into Clusters & calculating Manhattan distance to CH
+distance_SN_to_CH = zeros(n, 1); % Initialize distance array
+
+for i = 1:n
+    if (SN(i).role == 0) && (SN(i).E > 0) && (CLheads > 0) % Only proceed if there are cluster heads
+        % Calculate Manhattan distance from each node to all cluster heads
+        d = zeros(CLheads, 1);
+        for m = 1:CLheads
+            d(m) = abs(CL(m).x - SN(i).x) + abs(CL(m).y - SN(i).y); % Manhattan distance
+        end
+        [M, I] = min(d); % Get the minimum distance and index
+        
+        % Assign the nearest cluster head to the node
+        SN(i).cluster = I;       % Assign the cluster number
+        SN(i).dtch = d(I);       % Distance to the closest cluster head
+        SN(i).chid = CL(I).id;   % Cluster Head ID of the closest cluster head
+        distance_SN_to_CH(i) = SN(i).dtch;
+    else
+        SN(i).chid = NaN; % Use NaN if no cluster heads are available
+    end
+end
+
+% Remove zero distances from Table 1
+valid_SN_to_CH_idx = distance_SN_to_CH > 0;
+Table_SN_CH = table(find(valid_SN_to_CH_idx), distance_SN_to_CH(valid_SN_to_CH_idx), 'VariableNames', {'SN_ID', 'Distance_to_CH'});
+disp('Table 1: Distance Between Sensor Nodes (SN) and Cluster Heads (CH)');
+disp(Table_SN_CH);
+
+    % Calculate distances from CHs to Sink
+    distance_CH_to_Sink = zeros(CLheads, 1);
+    for m = 1:CLheads
+        distance_CH_to_Sink(m) = abs(sinkx - CL(m).x) + abs(sinky - CL(m).y); % Manhattan distance to sink
+    end
+
+    % Remove zero distances from Table 2
+    valid_CH_to_Sink_idx = distance_CH_to_Sink > 0;
+    Table_CH_Sink = table(find(valid_CH_to_Sink_idx), distance_CH_to_Sink(valid_CH_to_Sink_idx), 'VariableNames', {'CH_ID', 'Distance_to_Sink'});
+    disp('Table 2: Distance Between Cluster Heads (CH) and Sink');
+    disp(Table_CH_Sink);
+
+    % Steady-State Phase: Energy Dissipation and Throughput/Delay Calculation
+    for i = 1:n
+        if (SN(i).cond == 1) && (SN(i).role == 0) && (CLheads > 0)
+            if SN(i).E > 0
+                ETx = Eelec * k + Eamp * k * SN(i).dtch^2;
+                SN(i).E = SN(i).E - ETx;
+                energy = energy + ETx;
+                transmissions_this_round = transmissions_this_round + 1;
+
+                if SN(SN(i).chid).E > 0 && SN(SN(i).chid).cond == 1 && SN(SN(i).chid).role == 1
+                    ERx = (Eelec + EDA) * k;
+                    SN(SN(i).chid).E = SN(SN(i).chid).E - ERx;
+                    energy = energy + ERx;
+                    if SN(SN(i).chid).E <= 0
+                        SN(SN(i).chid).cond = 0;
+                        dead_nodes = dead_nodes + 1;
+                        operating_nodes = operating_nodes - 1;
+                    end
+                end
+            end
+            if SN(i).E <= 0
+                dead_nodes = dead_nodes + 1;
+                operating_nodes = operating_nodes - 1;
+                SN(i).cond = 0;
+            end
+        end
+    end
+
+    % Update throughput and delay
+    throughput_per_round(rnd) = transmissions_this_round;
+    if CLheads > 0
+        if ~isempty(distance_SN_to_CH(valid_SN_to_CH_idx)) && ~isempty(distance_CH_to_Sink(valid_CH_to_Sink_idx))
+            avg_delay = mean(distance_SN_to_CH(valid_SN_to_CH_idx)) + mean(distance_CH_to_Sink(valid_CH_to_Sink_idx));
+        else
+            avg_delay = 0;
+        end
+        delay_per_round(rnd) = avg_delay;
+    else
+        delay_per_round(rnd) = 0;
+    end
+
+    % Energy Dissipation for Cluster Heads
+    for i = 1:n
+        if (SN(i).cond == 1) && (SN(i).role == 1)
+            if SN(i).E > 0
+                ETx = Eelec * k + Eamp * k * SN(i).dts^2;
+                SN(i).E = SN(i).E - ETx;
+                energy = energy + ETx;
+            end
+            if SN(i).E <= 0
+                dead_nodes = dead_nodes + 1;
+                operating_nodes = operating_nodes - 1;
+                SN(i).cond = 0;
+            end
+        end
+    end
+
+    % Record operating nodes and energy consumption
+    op(rnd) = operating_nodes;
+    nrg(rnd) = energy;
+end
+
+%%%%%%%%%%%%%%% Plot Results %%%%%%%%%%%%%%%
+
+% 1. Wireless Sensor Network
+figure(1)
+title('Wireless Sensor Network');
+xlabel('x (m)');
+ylabel('y (m)');
+
+% 2. Operating Nodes per Round
+figure; plot(1:rnd, op(1:rnd), '-r', 'LineWidth', 2);
+title('Operating Nodes per Round');
+xlabel('Round');
+ylabel('Operational Nodes');
+
+% 3. Operating Nodes per Transmission
+figure; plot(1:rnd, op(1:rnd), '-g', 'LineWidth', 1);
+title('Operating Nodes per Transmission');
+xlabel('Transmission');
+ylabel('Operational Nodes');
+
+% 4. Energy Consumed per Transmission
+figure; plot(1:rnd, nrg(1:rnd), '-b', 'LineWidth', 1);
+title('Energy Consumed per Transmission');
+xlabel('Transmission');
+ylabel('Energy (J)');
+
+% 5. Average Energy Consumed by Nodes per Transmission
+figure; plot(1:rnd, nrg(1:rnd) ./ max(op(1:rnd), 1), '-m', 'LineWidth', 1);
+title('Average Energy Consumed by Nodes per Transmission');
+xlabel('Transmission');
+ylabel('Average Energy (J)');
+
+% 6. Throughput per Round
+figure; plot(1:rnd, throughput_per_round(1:rnd), 'b', 'LineWidth', 2);
+title('Throughput per Round');
+xlabel('Round');
+ylabel('Throughput');
+
+% 7. Delay per Round
+figure; plot(1:rnd, delay_per_round(1:rnd), 'r', 'LineWidth', 1);
+title('Delay per Round');
+xlabel('Round');
+ylabel('Delay');
